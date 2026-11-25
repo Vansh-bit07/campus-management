@@ -1,237 +1,274 @@
 from __future__ import annotations
 
+import logging
 import os
-import sqlite3
-from contextlib import asynccontextmanager
+from functools import lru_cache
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
-from uuid import UUID, uuid4
+from uuid import UUID
 
-from fastapi import FastAPI, Header, HTTPException, Query, status
-from pydantic import BaseModel, Field
-
-
-DATABASE_PATH = Path(os.getenv("DATABASE_PATH", "events.db"))
-
-
-def get_connection() -> sqlite3.Connection:
-    connection = sqlite3.connect(DATABASE_PATH)
-    connection.row_factory = sqlite3.Row
-    connection.execute("PRAGMA foreign_keys = ON")
-    return connection
+from dotenv import load_dotenv
+from flask import Flask, jsonify, request
+from flask_cors import CORS
+from postgrest import APIError
+from supabase import Client, create_client
 
 
-def initialize_database() -> None:
-    with get_connection() as connection:
-        connection.executescript(
-            """
-            CREATE TABLE IF NOT EXISTS users (
-                id TEXT PRIMARY KEY,
-                email TEXT NOT NULL UNIQUE,
-                role TEXT NOT NULL DEFAULT 'attendee'
-                    CHECK (role IN ('attendee', 'organizer'))
-            );
+load_dotenv()
 
-            CREATE TABLE IF NOT EXISTS events (
-                id TEXT PRIMARY KEY,
-                organizer_id TEXT NOT NULL REFERENCES users(id),
-                title TEXT NOT NULL,
-                capacity INTEGER NOT NULL CHECK (capacity > 0),
-                status TEXT NOT NULL DEFAULT 'published'
-                    CHECK (status IN ('draft', 'published', 'cancelled'))
-            );
+logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
+logger = logging.getLogger(__name__)
 
-            CREATE TABLE IF NOT EXISTS registrations (
-                id TEXT PRIMARY KEY,
-                user_id TEXT NOT NULL REFERENCES users(id),
-                event_id TEXT NOT NULL REFERENCES events(id),
-                created_at TEXT NOT NULL,
-                UNIQUE (user_id, event_id)
-            );
+app = Flask(__name__)
 
-            CREATE INDEX IF NOT EXISTS registrations_user_id_idx
-                ON registrations(user_id);
-            CREATE INDEX IF NOT EXISTS registrations_event_id_idx
-                ON registrations(event_id);
-            """
+
+def configured_cors_origins() -> str | list[str]:
+    configured = os.getenv("CORS_ORIGINS", "*").strip()
+    if configured == "*":
+        return "*"
+    return [origin.strip() for origin in configured.split(",") if origin.strip()]
+
+
+CORS(app, resources={r"/api/*": {"origins": configured_cors_origins()}})
+
+
+@lru_cache(maxsize=1)
+def get_supabase() -> Client:
+    url = os.getenv("SUPABASE_URL")
+    key = os.getenv("SUPABASE_KEY") or os.getenv("SUPABASE_PUBLISHABLE_KEY")
+    if not url or not key:
+        raise RuntimeError(
+            "SUPABASE_URL and SUPABASE_KEY (or SUPABASE_PUBLISHABLE_KEY) must be configured."
         )
-
-        user_count = connection.execute("SELECT COUNT(*) FROM users").fetchone()[0]
-        if user_count == 0:
-            organizer_id = str(uuid4())
-            attendee_id = str(uuid4())
-            connection.executemany(
-                "INSERT INTO users (id, email, role) VALUES (?, ?, ?)",
-                [
-                    (organizer_id, "organizer@example.com", "organizer"),
-                    (attendee_id, "attendee@example.com", "attendee"),
-                ],
-            )
-            connection.execute(
-                "INSERT INTO events (id, organizer_id, title, capacity, status) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (str(uuid4()), organizer_id, "Community meetup", 50, "published"),
-            )
+    return create_client(url, key)
 
 
-@asynccontextmanager
-async def lifespan(_: FastAPI):
-    initialize_database()
-    yield
+def error_response(message: str, status_code: int):
+    return jsonify({"detail": message}), status_code
 
 
-app = FastAPI(
-    title="Events API",
-    version="1.0.0",
-    description="Event browsing and registration API. Authentication is intentionally disabled for now.",
-    lifespan=lifespan,
-)
-
-
-class EventResponse(BaseModel):
-    id: UUID
-    organizer_id: UUID
-    title: str
-    capacity: int
-    status: str
-    registration_count: int = 0
-
-
-class RegistrationCreate(BaseModel):
-    event_id: UUID
-    user_id: UUID = Field(description="Temporary user identity until authentication is added")
-
-
-class RegistrationResponse(BaseModel):
-    id: UUID
-    user_id: UUID
-    event_id: UUID
-    created_at: datetime
-
-
-def row_to_event(row: sqlite3.Row) -> dict[str, Any]:
-    return dict(row)
-
-
-def row_to_registration(row: sqlite3.Row) -> dict[str, Any]:
-    result = dict(row)
-    result["created_at"] = datetime.fromisoformat(result["created_at"])
-    return result
-
-
-def parse_user_id(value: str | None) -> str:
-    if not value:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Provide a user id using the X-User-Id header.",
-        )
+def parse_uuid(value: Any, field_name: str) -> str:
+    if not isinstance(value, str):
+        raise ValueError(f"{field_name} must be a valid UUID.")
     try:
         return str(UUID(value))
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail="X-User-Id must be a valid UUID.") from exc
+        raise ValueError(f"{field_name} must be a valid UUID.") from exc
 
 
-@app.get("/api/events", response_model=list[EventResponse])
-def list_events(
-    event_status: str | None = Query(default=None, alias="status"),
-    limit: int = Query(default=50, ge=1, le=100),
-    offset: int = Query(default=0, ge=0),
-):
-    query = """
-        SELECT e.*, COUNT(r.id) AS registration_count
-        FROM events e
-        LEFT JOIN registrations r ON r.event_id = e.id
-    """
-    parameters: list[Any] = []
+def parse_user_header() -> str:
+    value = request.headers.get("X-User-Id")
+    if not value:
+        raise ValueError("Provide a user id using the X-User-Id header.")
+    return parse_uuid(value, "X-User-Id")
+
+
+def fetch_registration_counts(event_ids: list[str]) -> dict[str, int]:
+    if not event_ids:
+        return {}
+    rows = (
+        get_supabase()
+        .table("registrations")
+        .select("event_id")
+        .in_("event_id", event_ids)
+        .execute()
+        .data
+    )
+    counts = {event_id: 0 for event_id in event_ids}
+    for row in rows:
+        counts[row["event_id"]] = counts.get(row["event_id"], 0) + 1
+    return counts
+
+
+def add_registration_count(event: dict[str, Any], counts: dict[str, int]) -> dict[str, Any]:
+    result = dict(event)
+    result["registration_count"] = counts.get(str(event["id"]), 0)
+    return result
+
+
+@app.get("/")
+def index():
+    return jsonify({"name": "Events API", "docs": "/api/events", "health": "/health"})
+
+
+@app.get("/api/events")
+def list_events():
+    event_status = request.args.get("status")
+    try:
+        limit = min(max(int(request.args.get("limit", 50)), 1), 100)
+        offset = max(int(request.args.get("offset", 0)), 0)
+    except ValueError:
+        return error_response("limit and offset must be integers.", 400)
+
+    query = get_supabase().table("events").select("id,organizer_id,title,capacity,status")
     if event_status:
-        query += " WHERE e.status = ?"
-        parameters.append(event_status)
-    query += " GROUP BY e.id ORDER BY e.title LIMIT ? OFFSET ?"
-    parameters.extend([limit, offset])
-    with get_connection() as connection:
-        rows = connection.execute(query, parameters).fetchall()
-    return [row_to_event(row) for row in rows]
+        query = query.eq("status", event_status)
+    rows = query.order("title").range(offset, offset + limit - 1).execute().data
+    counts = fetch_registration_counts([str(row["id"]) for row in rows])
+    return jsonify([add_registration_count(row, counts) for row in rows])
 
 
-@app.get("/api/events/{event_id}", response_model=EventResponse)
-def get_event(event_id: UUID):
-    with get_connection() as connection:
-        row = connection.execute(
-            """
-            SELECT e.*, COUNT(r.id) AS registration_count
-            FROM events e
-            LEFT JOIN registrations r ON r.event_id = e.id
-            WHERE e.id = ?
-            GROUP BY e.id
-            """,
-            (str(event_id),),
-        ).fetchone()
-    if row is None:
-        raise HTTPException(status_code=404, detail="Event not found.")
-    return row_to_event(row)
+@app.get("/api/events/<event_id>")
+def get_event(event_id: str):
+    try:
+        event_id = parse_uuid(event_id, "event_id")
+    except ValueError as exc:
+        return error_response(str(exc), 400)
+
+    rows = (
+        get_supabase()
+        .table("events")
+        .select("id,organizer_id,title,capacity,status")
+        .eq("id", event_id)
+        .limit(1)
+        .execute()
+        .data
+    )
+    if not rows:
+        return error_response("Event not found.", 404)
+    counts = fetch_registration_counts([event_id])
+    return jsonify(add_registration_count(rows[0], counts))
 
 
-@app.post("/api/registrations", response_model=RegistrationResponse, status_code=201)
-def create_registration(payload: RegistrationCreate):
-    registration_id = str(uuid4())
-    created_at = datetime.now(timezone.utc).isoformat()
-    with get_connection() as connection:
-        user = connection.execute("SELECT id FROM users WHERE id = ?", (str(payload.user_id),)).fetchone()
-        event = connection.execute(
-            "SELECT id, capacity, status FROM events WHERE id = ?", (str(payload.event_id),)
-        ).fetchone()
-        if user is None:
-            raise HTTPException(status_code=404, detail="User not found.")
-        if event is None:
-            raise HTTPException(status_code=404, detail="Event not found.")
-        if event["status"] != "published":
-            raise HTTPException(status_code=409, detail="Registrations are closed for this event.")
-        existing = connection.execute(
-            "SELECT id FROM registrations WHERE user_id = ? AND event_id = ?",
-            (str(payload.user_id), str(payload.event_id)),
-        ).fetchone()
-        if existing is not None:
-            raise HTTPException(status_code=409, detail="User is already registered for this event.")
-        registered = connection.execute(
-            "SELECT COUNT(*) FROM registrations WHERE event_id = ?", (str(payload.event_id),)
-        ).fetchone()[0]
-        if registered >= event["capacity"]:
-            raise HTTPException(status_code=409, detail="Event capacity has been reached.")
-        connection.execute(
-            "INSERT INTO registrations (id, user_id, event_id, created_at) VALUES (?, ?, ?, ?)",
-            (registration_id, str(payload.user_id), str(payload.event_id), created_at),
+@app.post("/api/registrations")
+def create_registration():
+    payload = request.get_json(silent=True) or {}
+    try:
+        event_id = parse_uuid(payload.get("event_id"), "event_id")
+        user_id = parse_uuid(payload.get("user_id"), "user_id")
+    except ValueError as exc:
+        return error_response(str(exc), 422)
+
+    client = get_supabase()
+    user = client.table("users").select("id").eq("id", user_id).limit(1).execute().data
+    event_rows = (
+        client.table("events")
+        .select("id,capacity,status")
+        .eq("id", event_id)
+        .limit(1)
+        .execute()
+        .data
+    )
+    if not user:
+        return error_response("User not found.", 404)
+    if not event_rows:
+        return error_response("Event not found.", 404)
+    event = event_rows[0]
+    if event["status"] != "published":
+        return error_response("Registrations are closed for this event.", 409)
+
+    existing = (
+        client.table("registrations")
+        .select("id")
+        .eq("user_id", user_id)
+        .eq("event_id", event_id)
+        .limit(1)
+        .execute()
+        .data
+    )
+    if existing:
+        return error_response("User is already registered for this event.", 409)
+
+    registered = (
+        client.table("registrations")
+        .select("id", count="exact")
+        .eq("event_id", event_id)
+        .execute()
+    )
+    if (registered.count or 0) >= event["capacity"]:
+        return error_response("Event capacity has been reached.", 409)
+
+    try:
+        created_at = datetime.now(timezone.utc).isoformat()
+        created = (
+            client.table("registrations")
+            .insert({"user_id": user_id, "event_id": event_id, "created_at": created_at})
+            .execute()
+            .data
         )
-    return {"id": registration_id, "user_id": payload.user_id, "event_id": payload.event_id, "created_at": created_at}
+    except APIError as exc:
+        if getattr(exc, "code", None) == "23505":
+            return error_response("User is already registered for this event.", 409)
+        raise
+
+    if not created:
+        return error_response("Registration could not be created.", 500)
+    return jsonify(created[0]), 201
 
 
-@app.get("/api/me/registrations", response_model=list[RegistrationResponse])
-def list_my_registrations(x_user_id: str | None = Header(default=None)):
-    user_id = parse_user_id(x_user_id)
-    with get_connection() as connection:
-        rows = connection.execute(
-            "SELECT * FROM registrations WHERE user_id = ? ORDER BY created_at DESC", (user_id,)
-        ).fetchall()
-    return [row_to_registration(row) for row in rows]
+@app.get("/api/me/registrations")
+def list_my_registrations():
+    try:
+        user_id = parse_user_header()
+    except ValueError as exc:
+        return error_response(str(exc), 400)
+    rows = (
+        get_supabase()
+        .table("registrations")
+        .select("id,user_id,event_id,created_at")
+        .eq("user_id", user_id)
+        .order("created_at", desc=True)
+        .execute()
+        .data
+    )
+    return jsonify(rows)
 
 
-@app.get("/api/events/{event_id}/registrations", response_model=list[RegistrationResponse])
-def list_event_registrations(event_id: UUID, x_user_id: str | None = Header(default=None)):
-    user_id = parse_user_id(x_user_id)
-    with get_connection() as connection:
-        event = connection.execute(
-            "SELECT organizer_id FROM events WHERE id = ?", (str(event_id),)
-        ).fetchone()
-        if event is None:
-            raise HTTPException(status_code=404, detail="Event not found.")
-        if event["organizer_id"] != user_id:
-            raise HTTPException(status_code=403, detail="Only the event organizer can view attendees.")
-        rows = connection.execute(
-            "SELECT * FROM registrations WHERE event_id = ? ORDER BY created_at ASC", (str(event_id),)
-        ).fetchall()
-    return [row_to_registration(row) for row in rows]
+@app.get("/api/events/<event_id>/registrations")
+def list_event_registrations(event_id: str):
+    try:
+        event_id = parse_uuid(event_id, "event_id")
+        user_id = parse_user_header()
+    except ValueError as exc:
+        return error_response(str(exc), 400)
+
+    event_rows = (
+        get_supabase()
+        .table("events")
+        .select("organizer_id")
+        .eq("id", event_id)
+        .limit(1)
+        .execute()
+        .data
+    )
+    if not event_rows:
+        return error_response("Event not found.", 404)
+    if event_rows[0]["organizer_id"] != user_id:
+        return error_response("Only the event organizer can view attendees.", 403)
+
+    rows = (
+        get_supabase()
+        .table("registrations")
+        .select("id,user_id,event_id,created_at")
+        .eq("event_id", event_id)
+        .order("created_at")
+        .execute()
+        .data
+    )
+    return jsonify(rows)
 
 
 @app.get("/health")
 def health_check():
-    return {"status": "ok"}
+    try:
+        get_supabase().table("events").select("id").limit(1).execute()
+    except Exception as exc:  # noqa: BLE001 - health endpoint must return JSON.
+        logger.warning("Supabase health check failed: %s", exc)
+        return jsonify({"status": "degraded", "database": "unavailable"}), 503
+    return jsonify({"status": "ok", "database": "ok"})
+
+
+@app.errorhandler(APIError)
+def handle_supabase_error(error: APIError):
+    logger.exception("Supabase request failed", exc_info=error)
+    return error_response("Database request failed.", 502)
+
+
+@app.errorhandler(Exception)
+def handle_unexpected_error(error: Exception):
+    logger.exception("Unhandled application error", exc_info=error)
+    return error_response("Internal server error.", 500)
+
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", "5000")))
