@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import patch
 
-from app import app
+from app import app, configured_cors_origins
 
 
 class ApiCheckpointTests(unittest.TestCase):
@@ -13,6 +13,23 @@ class ApiCheckpointTests(unittest.TestCase):
         response = self.client.get("/")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.get_json()["docs"], "/api/events")
+
+    def test_frontend_is_served_by_backend(self):
+        response = self.client.get("/app/", buffered=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Gather — Campus events", response.get_data(as_text=True))
+        response.close()
+
+        for path in ("/app/styles.css", "/app/app.js"):
+            with self.subTest(path=path):
+                asset = self.client.get(path, buffered=True)
+                self.assertEqual(asset.status_code, 200)
+                asset.close()
+
+    def test_frontend_path_without_trailing_slash_redirects(self):
+        response = self.client.get("/app")
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.headers["Location"], "/app/")
 
     def test_registration_requires_authenticated_identity(self):
         response = self.client.post(
@@ -51,6 +68,21 @@ class ApiCheckpointTests(unittest.TestCase):
         response = self.client.get("/health")
         self.assertEqual(response.status_code, 503)
         self.assertEqual(response.get_json()["status"], "degraded")
+
+    @patch("app.get_supabase")
+    def test_health_route_includes_cors_headers(self, get_supabase):
+        get_supabase.side_effect = RuntimeError("offline")
+        origins = configured_cors_origins()
+        origin = (
+            origins[0]
+            if isinstance(origins, list) and origins
+            else "http://localhost:8000"
+        )
+        response = self.client.get(
+            "/health",
+            headers={"Origin": origin},
+        )
+        self.assertIn("Access-Control-Allow-Origin", response.headers)
 
 
 if __name__ == "__main__":

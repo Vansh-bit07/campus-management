@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#f6f5f0">
+    <meta name="description" content="Find and join events happening around campus.">
+    <title>Gather — Campus events</title>
+    <link rel="stylesheet" href="styles.css">
+    <script src="app.js" defer></script>
+  </head>
+  <body>
+    <header class="topbar">
+      <a class="brand" href="#" aria-label="Gather home">
+        <span class="brand-mark" aria-hidden="true">g.</span>
+        <span class="brand-copy"><strong>gather</strong><small>CAMPUS, TOGETHER</small></span>
+      </a>
+      <nav class="main-nav" aria-label="Main navigation">
+        <a class="nav-link active" href="#events">Discover</a>
+        <a class="nav-link" href="#my-registrations">My events</a>
+      </nav>
+      <div class="top-actions">
+        <span class="connection" id="connection-status" role="status">
+          <span class="status-dot" aria-hidden="true"></span>
+          <span id="connection-label">Connecting</span>
+        </span>
+        <button class="icon-button" id="settings-button" type="button" aria-label="Connection settings" title="Connection settings">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 8.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7Z"/><path d="m19.4 13.5 1.1.9-1.6 2.8-1.4-.5a7.8 7.8 0 0 1-1.8 1l-.2 1.5h-3.2l-.2-1.5a7.8 7.8 0 0 1-1.8-1l-1.4.5-1.6-2.8 1.1-.9a7.5 7.5 0 0 1 0-2l-1.1-.9 1.6-2.8 1.4.5a7.8 7.8 0 0 1 1.8-1l.2-1.5h3.2l.2 1.5a7.8 7.8 0 0 1 1.8 1l1.4-.5 1.6 2.8-1.1.9a7.5 7.5 0 0 1 0 2Z"/></svg>
+        </button>
+      </div>
+    </header>
+
+    <main>
+      <section class="hero" aria-labelledby="hero-title">
+        <div class="hero-copy">
+          <p class="eyebrow"><span class="eyebrow-line"></span> YOUR CAMPUS, YOUR CALENDAR</p>
+          <h1 id="hero-title">Make room for<br>something <em>new.</em></h1>
+          <p class="hero-description">The best campus memories start with a plan. Find your next one.</p>
+          <a class="hero-link" href="#events">Explore what’s on <span aria-hidden="true">↓</span></a>
+        </div>
+        <div class="hero-art" aria-hidden="true">
+          <div class="art-orbit orbit-one"></div>
+          <div class="art-orbit orbit-two"></div>
+          <div class="art-sun"></div>
+          <div class="art-note note-top">GOOD THINGS<br>HAPPEN HERE</div>
+          <div class="art-note note-bottom">SHOW UP<br>AS YOU ARE <span>✳</span></div>
+          <div class="art-sticker">see<br>you<br>there!</div>
+          <div class="art-ground"></div>
+        </div>
+        <div class="hero-index"><span>01</span> / THE CAMPUS EDIT</div>
+      </section>
+
+      <section class="events-section" id="events" aria-labelledby="events-title">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">OUT THERE, HAPPENING</p>
+            <h2 id="events-title">Find your <em>thing.</em></h2>
+          </div>
+          <div class="events-count" id="events-count">Loading events<span class="count-mark">...</span></div>
+        </div>
+
+        <div class="toolbar">
+          <label class="search-box">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.8"/><path d="m16 16 4.5 4.5"/></svg>
+            <span class="visually-hidden">Search events</span>
+            <input id="search-input" type="search" placeholder="Search events..." autocomplete="off">
+          </label>
+          <label class="filter-box">
+            <span class="visually-hidden">Filter by event status</span>
+            <select id="status-filter">
+              <option value="published" selected>Published</option>
+              <option value="">All events</option>
+              <option value="draft">Draft</option>
+              <option value="cancelled">Cancelled</option>
+            </select>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg>
+          </label>
+          <button class="refresh-button" id="refresh-button" type="button">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7v5h-5"/><path d="M19 12a7 7 0 1 1-2-5"/></svg>
+            <span>Refresh</span>
+          </button>
+        </div>
+
+        <div class="event-grid" id="event-grid" aria-live="polite" aria-busy="true">
+          <div class="loading-card"><span class="loader" aria-hidden="true"></span><p>Finding the good stuff...</p></div>
+        </div>
+
+        <section class="registrations-section" id="my-registrations" aria-labelledby="registrations-title">
+          <div class="registrations-heading">
+            <div>
+              <p class="eyebrow">YOUR PLANS, ALL HERE</p>
+              <h2 id="registrations-title">My <em>events.</em></h2>
+            </div>
+            <button class="text-button" id="load-registrations" type="button">View my registrations <span aria-hidden="true">↗</span></button>
+          </div>
+          <div class="registrations-list" id="registrations-list">
+            <p class="muted-message">Add your user ID to see the events you’ve joined.</p>
+          </div>
+        </section>
+      </section>
+
+      <aside class="profile-strip" aria-label="Your profile">
+        <div class="profile-icon" aria-hidden="true">✳</div>
+        <div class="profile-copy">
+          <strong>Make it yours</strong>
+          <span>Enter your user ID to register and keep track of your plans.</span>
+        </div>
+        <form class="profile-form" id="profile-form">
+          <label class="visually-hidden" for="user-id">Your user ID</label>
+          <input id="user-id" name="user-id" type="text" placeholder="Your user UUID" autocomplete="off" spellcheck="false">
+          <button type="submit">Save ID <span aria-hidden="true">→</span></button>
+        </form>
+      </aside>
+    </main>
+
+    <footer class="footer">
+      <a class="footer-brand" href="#">gather<span>.</span></a>
+      <span>A little more campus, a little less scrolling.</span>
+      <span class="footer-note">MADE FOR SHOWING UP <span aria-hidden="true">✳</span></span>
+    </footer>
+
+    <dialog class="settings-dialog" id="settings-dialog" aria-labelledby="settings-title">
+      <form method="dialog" class="dialog-close-form">
+        <button class="dialog-close" aria-label="Close settings">×</button>
+      </form>
+      <p class="eyebrow">ONE QUICK CONNECTION</p>
+      <h2 id="settings-title">Connect to your <em>campus.</em></h2>
+      <p class="dialog-description">Enter the address where your Events API is running. It’s usually <code>http://127.0.0.1:5000</code> for local development.</p>
+      <form id="api-form" class="api-form">
+        <label for="api-url">API base URL</label>
+        <input id="api-url" name="api-url" type="url" placeholder="http://127.0.0.1:5000" required>
+        <button class="primary-button" type="submit">Save connection <span aria-hidden="true">→</span></button>
+      </form>
+      <p class="dialog-footnote">For local development, start the API and allow this frontend’s origin in <code>CORS_ORIGINS</code>. The API’s temporary user-ID header is not production authentication.</p>
+    </dialog>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  </body>
+</html>

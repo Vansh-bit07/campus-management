@@ -8,7 +8,7 @@ from typing import Any
 from uuid import UUID
 
 from dotenv import load_dotenv
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, redirect, request, send_from_directory
 from flask_cors import CORS
 from postgrest import APIError
 from supabase import Client, create_client
@@ -29,7 +29,14 @@ def configured_cors_origins() -> str | list[str]:
     return [origin.strip() for origin in configured.split(",") if origin.strip()]
 
 
-CORS(app, resources={r"/api/*": {"origins": configured_cors_origins()}})
+cors_origins = configured_cors_origins()
+CORS(
+    app,
+    resources={
+        r"/api/*": {"origins": cors_origins},
+        r"/health": {"origins": cors_origins},
+    },
+)
 
 
 @lru_cache(maxsize=1)
@@ -91,6 +98,21 @@ def add_registration_count(event: dict[str, Any], counts: dict[str, int]) -> dic
 @app.get("/")
 def index():
     return jsonify({"name": "Events API", "docs": "/api/events", "health": "/health"})
+
+
+@app.get("/app")
+def frontend_redirect():
+    return redirect("/app/", code=302)
+
+
+@app.get("/app/")
+def frontend_index():
+    return send_from_directory(os.path.join(app.root_path, "frontend"), "index.html")
+
+
+@app.get("/app/<path:filename>")
+def frontend_asset(filename: str):
+    return send_from_directory(os.path.join(app.root_path, "frontend"), filename)
 
 
 @app.get("/api/events")
