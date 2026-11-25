@@ -1,8 +1,6 @@
 const API_STORAGE_KEY = "gather.apiBase";
 const USER_STORAGE_KEY = "gather.userId";
-const DEFAULT_API_BASE = window.location.pathname.startsWith("/app/")
-  ? window.location.origin
-  : "http://127.0.0.1:5000";
+const DEFAULT_API_BASE = "https://campus-management-3z1n.onrender.com";
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const elements = {
