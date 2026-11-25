@@ -120,9 +120,9 @@ function eventCard(event) {
   const capacity = Number(event.capacity);
   const hasCapacity = Number.isFinite(capacity) && capacity >= 0;
   const full = hasCapacity && count >= capacity;
-  const canRegister = status === "published" && !full;
+  const canRegister = (status === "published" || status === "upcoming") && !full;
   const countLabel = hasCapacity ? `${count} / ${capacity} spots` : `${count} registered`;
-  const buttonLabel = full ? "Full" : status === "published" ? "Join event" : "Not open";
+  const buttonLabel = full ? "Full" : (status === "published" || status === "upcoming") ? "Join event" : "Not open";
 
   return `
     <article class="event-card">
