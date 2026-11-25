@@ -34,6 +34,9 @@ python app.py
 
 The API is available at `http://127.0.0.1:5000`; the health check is `/health`.
 
+See [API_CHECKPOINTS.md](API_CHECKPOINTS.md) for the endpoint acceptance
+checklist, database constraints, and Render release checklist.
+
 ## Environment variables
 
 | Variable | Required | Description |
@@ -53,6 +56,13 @@ Create a Render Web Service connected to this repository and the `main` branch. 
 - Health check: `/health`
 
 In Render's Environment settings, set `SUPABASE_URL` and `SUPABASE_KEY` as secret values. Set `CORS_ORIGINS` to the exact frontend origin(s) in production instead of `*`. Render provides `PORT`; the Gunicorn command binds to it.
+
+## Vercel deployment
+
+Vercel detects the top-level Flask `app` in `app.py` and deploys it as a
+Python Function. `vercel.json` excludes tests and diagram assets from the
+function bundle. Import this repository into Vercel and set `SUPABASE_URL`,
+`SUPABASE_KEY`, and `CORS_ORIGINS` in the project environment variables.
 
 ## Security notes
 

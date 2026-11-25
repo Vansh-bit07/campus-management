@@ -134,8 +134,20 @@ def get_event(event_id: str):
 def create_registration():
     payload = request.get_json(silent=True) or {}
     try:
+        authenticated_user_id = parse_user_header()
+    except ValueError as exc:
+        return error_response(str(exc), 401)
+
+    try:
         event_id = parse_uuid(payload.get("event_id"), "event_id")
-        user_id = parse_uuid(payload.get("user_id"), "user_id")
+        supplied_user_id = payload.get("user_id")
+        if supplied_user_id is not None:
+            supplied_user_id = parse_uuid(supplied_user_id, "user_id")
+            if supplied_user_id != authenticated_user_id:
+                return error_response(
+                    "user_id must match the authenticated user.", 403
+                )
+        user_id = authenticated_user_id
     except ValueError as exc:
         return error_response(str(exc), 422)
 
