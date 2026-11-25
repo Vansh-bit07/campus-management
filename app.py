@@ -76,7 +76,9 @@ def fetch_registration_counts(event_ids: list[str]) -> dict[str, int]:
     )
     counts = {event_id: 0 for event_id in event_ids}
     for row in rows:
-        counts[row["event_id"]] = counts.get(row["event_id"], 0) + 1
+        event_id = str(row["event_id"])
+        if event_id in counts:
+            counts[event_id] = counts[event_id] + 1
     return counts
 
 
@@ -133,6 +135,8 @@ def get_event(event_id: str):
 @app.post("/api/registrations")
 def create_registration():
     payload = request.get_json(silent=True) or {}
+    if not isinstance(payload, dict):
+        return error_response("Request body must be a JSON object.", 422)
     try:
         authenticated_user_id = parse_user_header()
     except ValueError as exc:
@@ -245,7 +249,7 @@ def list_event_registrations(event_id: str):
     )
     if not event_rows:
         return error_response("Event not found.", 404)
-    if event_rows[0]["organizer_id"] != user_id:
+    if str(event_rows[0]["organizer_id"]) != user_id:
         return error_response("Only the event organizer can view attendees.", 403)
 
     rows = (

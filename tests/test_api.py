@@ -33,6 +33,18 @@ class ApiCheckpointTests(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 403)
 
+    def test_registration_rejects_non_object_json(self):
+        response = self.client.post(
+            "/api/registrations",
+            headers={"X-User-Id": "00000000-0000-0000-0000-000000000001"},
+            json=["not", "an", "object"],
+        )
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(
+            response.get_json()["detail"],
+            "Request body must be a JSON object.",
+        )
+
     @patch("app.get_supabase")
     def test_health_reports_database_failure_as_json(self, get_supabase):
         get_supabase.side_effect = RuntimeError("missing configuration")
